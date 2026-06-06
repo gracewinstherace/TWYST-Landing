@@ -444,11 +444,17 @@ const safeFilePath = (pathname) => {
 const serveStatic = async (request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   let filePath = safeFilePath(url.pathname);
+  const isAssetRequest = Boolean(extname(url.pathname));
 
   try {
     const fileStat = await stat(filePath);
     if (fileStat.isDirectory()) filePath = join(filePath, "index.html");
   } catch {
+    if (isAssetRequest) {
+      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      response.end("Not found");
+      return;
+    }
     filePath = join(root, "index.html");
   }
 
