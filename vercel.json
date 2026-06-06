@@ -4,10 +4,7 @@
   "buildCommand": null,
   "functions": {
     "server.mjs": {
-      "includeFiles": [
-        "index.html",
-        "src/**"
-      ]
+      "includeFiles": "src/**"
     }
   },
   "rewrites": [
