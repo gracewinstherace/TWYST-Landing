@@ -1,7 +1,7 @@
 import React from "https://esm.sh/react@18.2.0";
 import { Send, Sparkles, X } from "https://esm.sh/lucide-react@0.468.0?deps=react@18.2.0";
 import { questions } from "../data/questions.js";
-import { cleanProfileAnswer, isClarificationLike } from "../utils/profileCleaner.js";
+import { isClarificationLike, normalizeAnswer } from "../utils/profileCleaner.js";
 import { EmailResults } from "./EmailResults.js";
 import { MessageBubble, TypingIndicator } from "./MessageBubble.js";
 
@@ -46,12 +46,12 @@ const interpretChatStep = async ({ question, answers, userMessage }) => {
     return {
       ...step,
       action: "answer",
-      value: cleanProfileAnswer(question.id, returnedValue)
+      value: normalizeAnswer(question.id, returnedValue)
     };
   } catch {
     return isClarificationLike(userMessage)
       ? { action: "clarify", reply: clarifyLocally(question), value: "" }
-      : { action: "answer", reply: "Got it.", value: cleanProfileAnswer(question.id, userMessage) };
+      : { action: "answer", reply: "Got it.", value: normalizeAnswer(question.id, userMessage) };
   }
 };
 
@@ -91,12 +91,12 @@ function ProfilePanel({ answers, currentIndex, onChange, onBlur }) {
 export function ChatModal({ isOpen, onClose }) {
   const [messages, setMessages] = React.useState([firstMessage]);
   const [answers, setAnswers] = React.useState({});
+  const [rawAnswers, setRawAnswers] = React.useState({});
   const [questionIndex, setQuestionIndex] = React.useState(0);
   const [value, setValue] = React.useState("");
   const [isTyping, setIsTyping] = React.useState(false);
   const [isComplete, setIsComplete] = React.useState(false);
   const [iteration, setIteration] = React.useState(0);
-  const [refineTone, setRefineTone] = React.useState("");
   const threadRef = React.useRef(null);
 
   React.useEffect(() => {
@@ -108,20 +108,22 @@ export function ChatModal({ isOpen, onClose }) {
   const reset = () => {
     setMessages([firstMessage]);
     setAnswers({});
+    setRawAnswers({});
     setQuestionIndex(0);
     setValue("");
     setIsTyping(false);
     setIsComplete(false);
     setIteration(0);
-    setRefineTone("");
   };
 
   const updateAnswer = (id, nextValue) => {
     setAnswers((current) => ({ ...current, [id]: nextValue }));
+    setRawAnswers((current) => ({ ...current, [id]: nextValue }));
   };
 
-  const normalizeAnswer = (id, nextValue) => {
-    setAnswers((current) => ({ ...current, [id]: cleanProfileAnswer(id, nextValue) }));
+  const normalizeProfileValue = (id, nextValue) => {
+    setRawAnswers((current) => ({ ...current, [id]: nextValue }));
+    setAnswers((current) => ({ ...current, [id]: normalizeAnswer(id, nextValue) }));
   };
 
   const submit = async (event) => {
@@ -157,7 +159,8 @@ export function ChatModal({ isOpen, onClose }) {
         return;
       }
 
-      const acceptedValue = cleanProfileAnswer(activeQuestion.id, step.value || trimmed);
+      const acceptedValue = normalizeAnswer(activeQuestion.id, step.value || trimmed);
+      setRawAnswers((current) => ({ ...current, [activeQuestion.id]: trimmed }));
       setAnswers((current) => ({ ...current, [activeQuestion.id]: acceptedValue }));
       const nextIndex = questionIndex + 1;
       if (nextIndex < questions.length) {
@@ -191,6 +194,35 @@ export function ChatModal({ isOpen, onClose }) {
 
   const currentQuestion = questions[questionIndex] || questions[questions.length - 1];
   const progress = Math.round((Object.keys(answers).length / questions.length) * 100);
+
+  if (isComplete) {
+    return h(
+      "div",
+      { className: "modal-layer", role: "dialog", "aria-modal": "true", "aria-label": "TWYST drafts" },
+      h("button", { className: "modal-scrim", type: "button", "aria-label": "Close TWYST drafts", onClick: onClose }),
+      h(
+        "div",
+        { className: "chat-workspace completed-workspace" },
+        h(
+          "div",
+          { className: "completed-profile-column" },
+          h(
+            "header",
+            { className: "completed-profile-header" },
+            h("div", null, h("strong", null, "Outreach profile"), h("span", null, "Edit any detail before regenerating")),
+            h("button", { className: "close-button", type: "button", onClick: onClose, "aria-label": "Close drafts" }, h(X, { size: 18 }))
+          ),
+          h(ProfilePanel, { answers, currentIndex: questions.length - 1, onChange: updateAnswer, onBlur: normalizeProfileValue })
+        ),
+        h(EmailResults, {
+          answers,
+          iteration,
+          onRegenerate: () => setIteration((current) => current + 1),
+          onStartOver: reset
+        })
+      )
+    );
+  }
 
   return h(
     "div",
@@ -243,21 +275,7 @@ export function ChatModal({ isOpen, onClose }) {
           )
         )
       ),
-      isComplete
-        ? h(
-            "div",
-            { className: "completion-column" },
-            h(ProfilePanel, { answers, currentIndex: questions.length - 1, onChange: updateAnswer, onBlur: normalizeAnswer }),
-            h(EmailResults, {
-              answers,
-              iteration,
-              refineTone,
-              onRegenerate: () => setIteration((current) => current + 1),
-              onRefineTone: setRefineTone,
-              onStartOver: reset
-            })
-          )
-        : h(ProfilePanel, { answers, currentIndex: questionIndex, onChange: updateAnswer, onBlur: normalizeAnswer })
+      h(ProfilePanel, { answers, currentIndex: questionIndex, onChange: updateAnswer, onBlur: normalizeProfileValue })
     )
   );
 }

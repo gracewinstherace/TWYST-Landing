@@ -3,7 +3,8 @@ import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cleanProfileAnswer, cleanProfileAnswers, isClarificationLike } from "./src/utils/profileCleaner.js";
+import { locallyRefineDraft } from "./src/utils/emailGenerator.js";
+import { cleanProfileAnswers, isClarificationLike, normalizeAnswer } from "./src/utils/profileCleaner.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 
@@ -89,15 +90,56 @@ const draftSchemaDescription = `Return strict JSON with this shape:
 {
   "drafts": [
     {
-      "id": "short",
-      "title": "Short version",
-      "badge": "Concise",
+      "id": "professional",
+      "title": "Professional",
+      "badge": "Recommended",
+      "description": "Polished, direct, and appropriate for most outreach.",
+      "profile": {},
+      "personalizationPlan": {
+        "positioning": "",
+        "recipient_relevance": "",
+        "credibility_point": "",
+        "ask": "",
+        "outreach_logic": ""
+      },
       "subject": "Subject text only",
-      "body": "Greeting and full email body without subject"
+      "body": "120 to 170 word email body without subject",
+      "shortVersion": "concise version under 90 words",
+      "followUp": "follow-up email body",
+      "qualityCheck": {
+        "specific_user_experience_included": true,
+        "specific_recipient_reason_included": true,
+        "clear_ask_included": true,
+        "generic_language_removed": true
+      }
     }
   ]
 }
-Include exactly five drafts with ids: warm, cold, short, longer, formal.`;
+Include exactly two drafts with ids: professional and friendly.`;
+
+const singleDraftSchemaDescription = `Return strict JSON with this shape:
+{
+  "draft": {
+    "id": "same id as the input draft",
+    "title": "same title as the input draft",
+    "badge": "short label for the revised draft",
+    "subject": "revised subject text only",
+    "body": "revised email body without subject"
+  }
+}`;
+
+const compactEmailBody = (body = "") => String(body || "").replace(/\s*\n+\s*/g, "\n").trim();
+
+const normalizeDraftPayload = (draft = {}) => ({
+  ...draft,
+  personalizationPlan: draft.personalizationPlan || draft.personalization_plan,
+  shortVersion: draft.shortVersion || draft.short_version || draft.email?.short_version,
+  followUp: draft.followUp || draft.follow_up || draft.email?.follow_up,
+  subject: draft.subject || draft.email?.subject || "",
+  body: compactEmailBody(draft.body || draft.email?.body || ""),
+  qualityCheck: draft.qualityCheck || draft.quality_check,
+  profile: draft.profile || {}
+});
 
 const buildPrompt = ({ answers = {}, refineTone = "", iteration = 0 }) => {
   const toneInstruction = refineTone
@@ -105,12 +147,22 @@ const buildPrompt = ({ answers = {}, refineTone = "", iteration = 0 }) => {
     : `The user's preferred tone is: ${answers.tone || "polished, warm, and concise"}.`;
 
   return [
-    "You are TWYST, an expert finance recruiting outreach assistant for university students.",
-    "Generate personalized but reusable networking email templates for finance recruiting.",
-    "Do not require target companies from the user. Use placeholders like [Name], [Firm], [Team], or [Alum/Professional] where useful.",
-    "The emails should feel polished, natural, and credible for students breaking into finance.",
-    "Each draft must include a subject line, greeting, short intro, personalized reason for reaching out, relevant background, clear ask for a quick call or coffee chat, and polished closing.",
-    "The five default drafts should be warm, colder, short, longer, and formal. If refineTone asks for warmer, colder, longer, shorter, formal, or casual, apply that across all drafts while preserving useful variety.",
+    "You are TWYST, a cold outreach strategist for students and early-career candidates.",
+    "Do not write immediately. First convert the chat history into a structured outreach profile, then create a personalization plan, then write the email.",
+    "Generate networking emails for a student seeking an informational conversation in finance.",
+    "Never repeat raw field values verbatim or dump data into the email. Integrate facts into complete, natural sentences.",
+    "Do not use placeholders of any kind. Avoid bracketed text, fake names, fake firms, fake teams, and invented recipient details.",
+    "If a field is missing, omit it naturally. Do not mention that information is missing.",
+    "Mention previous experience only if it is relevant to the student's stated field. Paraphrase it instead of copying it. For example, an RBC Capital Markets Internship can become a prior capital markets internship; Debate Coach should usually be omitted for investment banking unless framed very lightly as communication experience.",
+    "The emails should sound like a real student reaching out for an informational conversation, not a cover letter or a data template.",
+    "Each draft must include a subject line, greeting, short intro, reason for reaching out, relevant background if any, clear ask for a quick call or coffee chat, and polished closing.",
+    "Before each email, generate a personalization plan with: user-positioning sentence, recipient/company relevance sentence, credibility proof point, clear ask, and one-line reason this outreach makes sense.",
+    "Generate a 120 to 170 word email, a concise version under 90 words, a follow-up email, and an explanation through the personalization plan of what was personalized.",
+    "Reject generic output. The email must include at least one specific user experience when available, one specific career goal, one specific reason for contacting the recipient/company or role, one clear ask, and no vague unsupported phrases.",
+    "Do not add blank lines between paragraphs. Use single line breaks only.",
+    "The two drafts must be professional and friendly.",
+    "Professional template structure: Hi [Name], then a concise profile/profile-path observation, then current student and career goal, then relevant experience evidence, then a low-friction 15-minute chat ask, then Best and the student's name.",
+    "Friendly template structure: Hi [Name], then a warm opening, then a profile/path observation close to the student's goal, then current student and experience evidence, then a quick 15-minute chat ask, then Best and the student's name.",
     "Avoid exaggeration, fake specificity, and generic filler.",
     toneInstruction,
     `Regeneration pass: ${iteration}. If this is above zero, vary phrasing and the ask meaningfully.`,
@@ -118,6 +170,28 @@ const buildPrompt = ({ answers = {}, refineTone = "", iteration = 0 }) => {
     "",
     "Student profile:",
     JSON.stringify(cleanProfileAnswers(answers), null, 2)
+  ].join("\n");
+};
+
+const buildDraftRefinePrompt = ({ answers = {}, draft = {}, instruction = "" }) => {
+  return [
+    "You are TWYST, an expert finance recruiting outreach editor.",
+    "Revise one networking email draft according to the user's instruction.",
+    "Keep it sounding like a student asking for an informational conversation.",
+    "Use the chat profile to keep the email related to the student's actual context.",
+    "Never use placeholders, fake names, fake companies, or bracketed text.",
+    "Do not repeat raw profile fields verbatim. Integrate facts naturally.",
+    "Mention previous experience only if relevant, and weave it in seamlessly.",
+    "Do not add blank lines between paragraphs. Use single line breaks only.",
+    singleDraftSchemaDescription,
+    "",
+    "Student profile:",
+    JSON.stringify(cleanProfileAnswers(answers), null, 2),
+    "",
+    "Current draft:",
+    JSON.stringify({ ...draft, body: compactEmailBody(draft.body) }, null, 2),
+    "",
+    `User instruction: ${instruction || "Improve this draft while preserving its style."}`
   ].join("\n");
 };
 
@@ -144,7 +218,7 @@ const localChatStep = ({ question = {}, userMessage = "" }) => {
     ok: true,
     source: "local",
     action: "answer",
-    value: cleanProfileAnswer(question.id, userMessage),
+    value: normalizeAnswer(question.id, userMessage),
     reply: "Got it."
   };
 };
@@ -200,7 +274,7 @@ const chatStepWithOpenAI = async (payload) => {
 
   const parsed = parseJsonText(extractResponseText(data));
   const action = parsed.action === "clarify" ? "clarify" : "answer";
-  const cleanedValue = cleanProfileAnswer(payload.question?.id, parsed.value || payload.userMessage || "");
+  const cleanedValue = normalizeAnswer(payload.question?.id, parsed.value || payload.userMessage || "");
 
   if (action === "clarify" || isClarificationLike(cleanedValue)) {
     return {
@@ -266,8 +340,67 @@ const generateWithOpenAI = async (payload) => {
     ok: true,
     source: "openai",
     model,
-    drafts: parsed.drafts
+    drafts: parsed.drafts.map(normalizeDraftPayload)
   };
+};
+
+const refineDraftWithOpenAI = async (payload) => {
+  const fallback = {
+    ok: true,
+    source: "local",
+    draft: locallyRefineDraft(payload)
+  };
+
+  if (!process.env.OPENAI_API_KEY) return fallback;
+
+  const apiResponse = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      input: buildDraftRefinePrompt(payload),
+      temperature: 0.65
+    })
+  });
+
+  const data = await apiResponse.json();
+  if (!apiResponse.ok) {
+    return {
+      ...fallback,
+      message: data.error?.message || "OpenAI draft refinement failed."
+    };
+  }
+
+  const parsed = parseJsonText(extractResponseText(data));
+  return {
+    ok: true,
+    source: "openai",
+    model,
+    draft: {
+      ...payload.draft,
+      ...normalizeDraftPayload(parsed.draft),
+      body: compactEmailBody(parsed.draft?.body || parsed.draft?.email?.body || payload.draft?.body || "")
+    }
+  };
+};
+
+const handleRefineDraft = async (request, response) => {
+  let payload = {};
+  try {
+    payload = await readJsonBody(request);
+    const result = await refineDraftWithOpenAI(payload);
+    sendJson(response, 200, result);
+  } catch (error) {
+    sendJson(response, 200, {
+      ok: true,
+      source: "local",
+      draft: locallyRefineDraft(payload),
+      message: error instanceof Error ? error.message : "Draft refinement failed."
+    });
+  }
 };
 
 const handleChatStep = async (request, response) => {
@@ -332,6 +465,11 @@ const serveStatic = async (request, response) => {
 };
 
 createServer((request, response) => {
+  if (request.method === "POST" && request.url?.startsWith("/api/refine-draft")) {
+    handleRefineDraft(request, response);
+    return;
+  }
+
   if (request.method === "POST" && request.url?.startsWith("/api/chat-step")) {
     handleChatStep(request, response);
     return;
