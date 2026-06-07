@@ -3,14 +3,14 @@
   "framework": null,
   "buildCommand": null,
   "functions": {
-    "server.mjs": {
-      "includeFiles": "src/**"
+    "api/**/*.mjs": {
+      "includeFiles": "{index.html,src/**}"
     }
   },
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "/server.mjs"
+      "destination": "/api/[...path].mjs"
     }
   ]
 }

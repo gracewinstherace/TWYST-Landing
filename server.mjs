@@ -470,7 +470,7 @@ const serveStatic = async (request, response) => {
   }
 };
 
-createServer((request, response) => {
+const requestHandler = (request, response) => {
   if (request.method === "POST" && request.url?.startsWith("/api/refine-draft")) {
     handleRefineDraft(request, response);
     return;
@@ -493,7 +493,13 @@ createServer((request, response) => {
 
   response.writeHead(405, { "content-type": "text/plain; charset=utf-8" });
   response.end("Method not allowed");
-}).listen(port, () => {
-  console.log(`TWYST server running at http://localhost:${port}/`);
-  console.log(process.env.OPENAI_API_KEY ? `OpenAI enabled with ${model}` : "OpenAI disabled: set OPENAI_API_KEY to enable AI drafts.");
-});
+};
+
+export default requestHandler;
+
+if (!process.env.VERCEL) {
+  createServer(requestHandler).listen(port, () => {
+    console.log(`TWYST server running at http://localhost:${port}/`);
+    console.log(process.env.OPENAI_API_KEY ? `OpenAI enabled with ${model}` : "OpenAI disabled: set OPENAI_API_KEY to enable AI drafts.");
+  });
+}
